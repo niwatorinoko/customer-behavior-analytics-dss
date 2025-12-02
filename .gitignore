@@ -8,7 +8,6 @@ venv/
 .venv/
 env/
 .env
-.env.*
 pip-wheel-metadata/
 *.egg-info/
 
