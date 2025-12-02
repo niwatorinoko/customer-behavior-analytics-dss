@@ -2,9 +2,9 @@ import streamlit as st
 import pandas as pd
 import os
 
-from data_preprocessing import preprocess_retail_data
-from rfm import calculate_rfm
-from clustering import cluster_rfm
+from customer_segmentation.data_preprocessing import preprocess_retail_data
+from customer_segmentation.rfm import calculate_rfm
+from customer_segmentation.clustering import cluster_rfm
 from report_generator import generate_llm_report
 
 st.title("Customer Segmentation DSS")
