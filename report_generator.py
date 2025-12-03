@@ -2,6 +2,9 @@ import textwrap
 import pandas as pd
 import os
 from google import genai
+from fpdf import FPDF
+import tempfile
+
 
 # ======================================================
 # 🧠 プロンプト構築ロジック
@@ -21,7 +24,6 @@ def build_report_prompt(data_summary, mode: str = "customer") -> str:
             return str(df_or_dict)
 
     if mode == "customer":
-        # --- 顧客セグメント分析 ---
         table_text = df_to_text(data_summary["rfm"])
         prompt = f"""
         あなたはデータドリブンマーケティングの専門家です。
@@ -46,12 +48,10 @@ def build_report_prompt(data_summary, mode: str = "customer") -> str:
         出力フォーマット:
         - 「1. クラスタ概要」「2. 各クラスタの特徴」などの見出し
         - 箇条書き中心
-        - マーケティング担当者がすぐ読めるように
         - です・ます調で書く
         """
 
     elif mode == "product":
-        # --- 商品販売予測分析 ---
         table_text = df_to_text(data_summary["forecast"])
         prompt = f"""
         あなたはリテール業界のデータアナリストです。
@@ -79,7 +79,6 @@ def build_report_prompt(data_summary, mode: str = "customer") -> str:
         """
 
     elif mode == "combined":
-        # --- 顧客＋商品 統合レポート ---
         rfm_text = df_to_text(data_summary["rfm"])
         forecast_text = df_to_text(data_summary["forecast"])
         prompt = f"""
@@ -108,6 +107,7 @@ def build_report_prompt(data_summary, mode: str = "customer") -> str:
 
     return textwrap.dedent(prompt)
 
+
 # ======================================================
 # 🧠 LLM呼び出しロジック
 # ======================================================
@@ -115,9 +115,6 @@ def build_report_prompt(data_summary, mode: str = "customer") -> str:
 def generate_llm_report(data_summary, mode: str = "customer") -> str:
     """
     LLMを使ってマーケティングレポートを生成する。
-    data_summary: dict
-        {"rfm": DataFrame, "forecast": DataFrame} のような構成
-    mode: "customer" | "product" | "combined"
     """
     prompt = build_report_prompt(data_summary, mode)
 
@@ -135,4 +132,27 @@ def generate_llm_report(data_summary, mode: str = "customer") -> str:
         return response.text
 
     except Exception as e:
+        # APIエラーをStreamlit側でハンドルしやすいように明示
         raise RuntimeError(f"LLMレポート生成中にエラーが発生しました: {e}")
+
+
+# ======================================================
+# 📄 PDF出力機能（追加）
+# ======================================================
+
+def export_report_to_pdf(report_text: str, title: str = "Marketing_Report") -> str:
+    """
+    LLMが生成したレポートをPDFに変換し、一時ファイルのパスを返す。
+    """
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_font("Helvetica", size=12)
+    pdf.multi_cell(0, 10, txt=title, align="C")
+    pdf.ln(10)
+
+    for line in report_text.split("\n"):
+        pdf.multi_cell(0, 8, txt=line)
+
+    temp_path = tempfile.mktemp(suffix=".pdf")
+    pdf.output(temp_path)
+    return temp_path

@@ -1,7 +1,7 @@
 import streamlit as st
 from customer_segmentation.segmentation_workflow import run_segmentation_tab
 from product_forecast.forecast_workflow import run_forecast_tab
-from report_generator import generate_llm_report
+from report_generator import generate_llm_report, export_report_to_pdf
 
 st.set_page_config(page_title="Marketing DSS", layout="wide")
 st.title("📊 Marketing Decision Support System")
@@ -48,11 +48,22 @@ if st.sidebar.button("📄 レポートを生成する"):
             mode = "product"
 
         try:
-            report = generate_llm_report(data_summary, mode=mode)
-            st.subheader("📄 生成されたレポート")
-            st.write(report)
+            report_text = generate_llm_report(data_summary, mode=mode)
+            st.markdown("### 📄 生成されたレポート")
+            st.write(report_text)
+
+            # PDF出力
+            pdf_path = export_report_to_pdf(report_text)
+            with open(pdf_path, "rb") as f:
+                st.download_button(
+                    label="📥 PDFをダウンロード",
+                    data=f,
+                    file_name="marketing_report.pdf",
+                    mime="application/pdf"
+                )
         except Exception as e:
-            st.error(f"レポート生成に失敗しました: {e}")
+            st.error(str(e))
+
 
 
 tab1, tab2 = st.tabs(["🧍‍♂️ 顧客セグメンテーション", "📦 商品販売予測"])
