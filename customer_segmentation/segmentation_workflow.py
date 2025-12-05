@@ -36,5 +36,11 @@ def run_segmentation_tab():
         st.dataframe(cluster_means)
 
         st.success("顧客分析が完了しました！")
+        st.session_state["rfm_done"] = True
         st.session_state["rfm_clustered"] = rfm_clustered
         st.session_state["cluster_means"] = cluster_means
+        
+        # 消さないで！！
+        if not st.session_state.get("rerun_triggered", False):
+            st.session_state["rerun_triggered"] = True
+            st.rerun()

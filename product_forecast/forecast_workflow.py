@@ -39,4 +39,9 @@ def run_forecast_tab():
         st.line_chart(daily_sales.set_index("Date")["SalesCount"])
 
     st.success("簡易的な販売分析が完了しました。")
-    st.session_state["product_summary"] = product_summary
+    st.session_state["forecast_done"] = True
+
+    # 消さないで！！
+    if not st.session_state.get("rerun_triggered", False):
+        st.session_state["rerun_triggered"] = True
+        st.rerun()
