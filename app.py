@@ -2,36 +2,41 @@ import streamlit as st
 from customer_segmentation.segmentation_workflow import run_segmentation_tab
 from product_forecast.forecast_workflow import run_forecast_tab
 from report_generator import generate_llm_report, export_report_to_pdf
+import base64
 
 st.set_page_config(page_title="Marketing DSS", layout="wide")
 st.title("📊 Marketing Decision Support System")
 
-st.sidebar.title("🧠 レポート生成設定")
+
+# ============================================================
+# サイドバー：レポート生成設定
+# ============================================================
+st.sidebar.title("Generate Report Settings")
 
 # チェック可能状態の判定
-customer_ready = "rfm_clustered" in st.session_state
-product_ready = "product_summary" in st.session_state
+customer_ready = st.session_state.get("rfm_done", False)
+product_ready = st.session_state.get("forecast_done", False)
 
 # チェックボックス
 use_customer = st.sidebar.checkbox(
-    "顧客セグメンテーション結果を使用", 
-    value=False, 
-    disabled=not customer_ready
+    "顧客セグメンテーション結果を使用",
+    value=st.session_state.get("use_customer", False),
+    disabled=not customer_ready,
+    key="use_customer"
 )
 
 use_product = st.sidebar.checkbox(
-    "商品販売予測結果を使用", 
-    value=False, 
-    disabled=not product_ready
+    "商品販売予測結果を使用",
+    value=st.session_state.get("use_product", False),
+    disabled=not product_ready,
+    key="use_product"
 )
 
 # レポート生成ボタン
-if st.sidebar.button("📄 レポートを生成する"):
+if st.sidebar.button("Generate Report"):
     if not use_customer and not use_product:
         st.sidebar.warning("少なくとも1つ選択してください。")
     else:
-        st.sidebar.info("Geminiによるレポート生成中...")
-
         # データ準備
         data_summary = {}
         if use_customer:
@@ -48,28 +53,32 @@ if st.sidebar.button("📄 レポートを生成する"):
             mode = "product"
 
         try:
-            report_text = generate_llm_report(data_summary, mode=mode)
-            st.markdown("### 📄 生成されたレポート")
-            st.write(report_text)
+            with st.spinner("Generating report..."):
+                report_text = generate_llm_report(data_summary, mode=mode)
+                
+            with st.spinner("Exporting to PDF..."):
+                pdf_path = export_report_to_pdf(report_text)
 
-            # PDF出力
-            pdf_path = export_report_to_pdf(report_text)
             with open(pdf_path, "rb") as f:
-                st.download_button(
-                    label="📥 PDFをダウンロード",
-                    data=f,
-                    file_name="marketing_report.pdf",
-                    mime="application/pdf"
-                )
+                pdf_bytes = f.read()
+            
+            b64 = st.session_state.get("pdf_b64", None)
+            if not b64:
+                b64 = base64.b64encode(pdf_bytes).decode()
+                st.session_state["pdf_b64"] = b64
+
+            href = f'<a href="data:application/pdf;base64,{b64}" download="marketing_report.pdf">📥 Click here to download your report automatically</a>'
+
+            st.sidebar.success("Report generated successfully!")
+            st.sidebar.markdown(href, unsafe_allow_html=True)
+
         except Exception as e:
             st.error(str(e))
-
-
 
 tab1, tab2 = st.tabs(["🧍‍♂️ 顧客セグメンテーション", "📦 商品販売予測"])
 
 # ============================================================
-# 🧍‍♂️ タブ①：顧客セグメンテーション（既存部分）
+# タブ①：顧客セグメンテーション
 # ============================================================
 
 with tab1:
@@ -79,7 +88,7 @@ with tab1:
         st.error(f"顧客分析中にエラーが発生しました: {e}")
 
 # ============================================================
-# 📦 タブ②：商品販売予測（新規追加）
+# タブ②：商品販売予測
 # ============================================================
 
 with tab2:

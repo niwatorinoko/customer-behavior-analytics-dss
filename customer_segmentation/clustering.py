@@ -1,10 +1,9 @@
-# =========================
-#  クラスタリング関数
-# =========================
 from sklearn.cluster import KMeans
 from sklearn.preprocessing import StandardScaler
 
-
+# =========================
+#  クラスタリング関数
+# =========================
 def cluster_rfm(rfm, k=4):
     scaler = StandardScaler()
     rfm_scaled = scaler.fit_transform(rfm)
