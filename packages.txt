@@ -1,4 +1,3 @@
-# packages.txt
 build-essential
 libcairo2
 libcairo2-dev
