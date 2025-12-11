@@ -1,126 +1,150 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+from sklearn.linear_model import LinearRegression
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 
-def simulate_product_forecast(product_summary: pd.DataFrame) -> pd.DataFrame:
-    """
-    集計結果に基づき、販売予測の精度指標をダミーで追加するシミュレーション関数。
-    実際には機械学習モデルを組み込みます。
-    """
-    
-    # 精度指標をダミーで生成
-    # 簡易的に販売件数が多いほど（おそらく重要な商品ほど）精度が高いと仮定
-    
-    def get_dummy_metrics(count):
-        # MAE (Mean Absolute Error), RMSE (Root Mean Square Error), R² (R-squared)
-        if count > 500:
-            return 15.0, 25.0, 0.85
-        elif count > 100:
-            return 25.0, 40.0, 0.75
-        else:
-            return 35.0, 50.0, 0.65
-            
-    # 新しい列を計算して追加
-    metrics = product_summary['SalesCount'].apply(
-        lambda x: pd.Series(get_dummy_metrics(x))
-    )
-    metrics.columns = ['MAE', 'RMSE', 'R²']
-    
-    forecast_summary = pd.concat([product_summary, metrics], axis=1)
-    
-    return forecast_summary.sort_values(by='SalesCount', ascending=False)
+
+@st.cache_data
+def load_csv(file_bytes: bytes) -> pd.DataFrame:
+    from io import BytesIO
+    try:
+        return pd.read_csv(BytesIO(file_bytes), encoding="utf_8_sig")
+    except UnicodeDecodeError:
+        return pd.read_csv(BytesIO(file_bytes), encoding="shift_jis", errors="ignore")
+
+
+@st.cache_data
+def run_forecast_model(df: pd.DataFrame, days_ahead: int) -> pd.DataFrame:
+    results = []
+
+    for product in df["Product"].unique():
+        subset = df[df["Product"] == product].copy()
+        subset = subset.groupby("Date").size().reset_index(name="SalesCount")
+
+        if subset.empty or len(subset) < 5:
+            continue
+
+        subset["DayIndex"] = (subset["Date"] - subset["Date"].min()).dt.days
+        X = subset[["DayIndex"]]
+        y = subset["SalesCount"]
+
+        model = LinearRegression()
+        model.fit(X, y)
+
+        y_pred = model.predict(X)
+        mae = mean_absolute_error(y, y_pred)
+        rmse = np.sqrt(mean_squared_error(y, y_pred))
+        r2 = r2_score(y, y_pred)
+
+        last_idx = subset["DayIndex"].max()
+        future_idx = np.array([[last_idx + days_ahead]])
+        future_sales = model.predict(future_idx)[0]
+
+        results.append({
+            "Product": product,
+            "TotalSales": int(y.sum()),
+            "PredictedSales": round(float(future_sales), 2),
+            "MAE": round(float(mae), 2),
+            "RMSE": round(float(rmse), 2),
+            "R²": round(float(r2), 2)
+        })
+
+    if not results:
+        return pd.DataFrame(columns=["Product", "TotalSales", "PredictedSales", "MAE", "RMSE", "R²"])
+
+    return pd.DataFrame(results).sort_values("TotalSales", ascending=False)
+
 
 def run_forecast_tab():
-    st.header("📦 商品販売予測（試験実装）")
-    st.write("日時と商品名（＋数量）のデータから販売傾向を簡易的に分析し、レポート用サマリーを作成します。")
+    st.header("📦 商品販売予測（ステップ式ワークフロー・タブなし）")
 
-    uploaded_file = st.file_uploader("販売データCSVをアップロード", type="csv", key="forecast")
+    # ① データの整形
+    st.subheader("① データの整形")
+
+    uploaded_file = st.file_uploader("販売データCSVをアップロード", type="csv")
 
     if not uploaded_file:
-        # ファイルがない場合はセッションステートをクリア
-        st.session_state.pop("product_summary", None)
-        st.session_state["product_ready"] = False
+        st.info("CSV をアップロードすると次のステップが表示されます。")
         return
-    try:
-        uploaded_file.seek(0) # 念のためポインタをリセット
-        df = pd.read_csv(uploaded_file, encoding='utf_8_sig') 
-        st.success(f"ファイル `{uploaded_file.name}` の読み込みが完了しました (UTF-8 SIG)。")
-    
-    except UnicodeDecodeError:
-        # 2. 失敗したらShift-JISで再試行
-        try:
-            uploaded_file.seek(0)
-            df = pd.read_csv(uploaded_file, encoding='shift_jis')
-            st.warning("⚠️ ファイルがShift-JISとして読み込まれました。")
-        except Exception as e_sjis:
-            # 3. それでも失敗したら、エラーを無視してShift-JISで読み込み（最終手段）
-            try:
-                uploaded_file.seek(0)
-                df = pd.read_csv(uploaded_file, encoding='shift_jis', errors='ignore')
-                st.error("🚨 致命的なエンコーディングエラー。不正な文字を無視して読み込みました。データを確認してください。")
-            except Exception as e_ignore:
-                st.error(f"ファイルの読み込みに失敗しました。エンコーディングを確認してください: {e_ignore}")
-                st.session_state.pop("product_summary", None)
-                st.session_state["product_ready"] = False
-                return
-    
-    except Exception as e:
-        # その他の一般的な読み込みエラー
-        st.error(f"ファイルの読み込み中に予期せぬエラーが発生しました: {e}")
-        st.session_state.pop("product_summary", None)
-        st.session_state["product_ready"] = False
-        return
-    
-    # --- ファイルアップロード後の処理 ---
-    
-    st.subheader("① アップロードしたデータ")
+
+    df = load_csv(uploaded_file.getvalue())
+    st.write("アップロードされたデータ：")
     st.dataframe(df.head())
 
-    # 日付形式変換
-    if "Date" in df.columns:
-        df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
-        # 日付が欠損している場合は警告
-        if df["Date"].isna().sum() > 0:
-            st.warning("⚠️ 一部のDate列に無効な日付があります。")
-
-    # 集計例：商品ごとの売上件数
-    st.subheader("② 商品別の販売集計（簡易）")
-    if "Product" not in df.columns:
-        st.error("❌ 'Product' 列が存在しません。CSVのカラム名を確認してください。")
-        st.session_state.pop("product_summary", None)
-        st.session_state["product_ready"] = False
+    if "Date" not in df.columns or "Product" not in df.columns:
+        st.error("❌ 'Date' および 'Product' カラムが必要です。")
         return
-        
-    # 商品別集計を実行
-    product_summary = df.groupby("Product").size().reset_index(name="SalesCount")
-    st.dataframe(product_summary.sort_values("SalesCount", ascending=False))
 
-    # 日別トレンド（任意）
-    if "Date" in df.columns:
-        st.subheader("③ 日別販売数の推移")
-        daily_sales = df.groupby("Date").size().reset_index(name="SalesCount")
-        st.line_chart(daily_sales.set_index("Date")["SalesCount"])
-        
-    st.success("簡易的な販売分析が完了しました。レポート用サマリーを作成します。")
-    
-    # 1. 予測シミュレーションの実行 (即時実行)
-    forecast_summary_df = simulate_product_forecast(product_summary)
+    # 🔴 ここを修正：タイムゾーン付き／なしを強制的に揃える
+    df["Date"] = pd.to_datetime(df["Date"], errors="coerce", utc=True).dt.tz_convert(None)
 
-    # 2. 結果の表示
-    st.subheader("④ 予測サマリー（レポート連携用）")
-    st.info("販売件数に基づき、予測精度指標をシミュレーションしています。")
-    st.dataframe(forecast_summary_df)
-        
-    # 3. レポート連携のためにセッションステートに保存
-    st.session_state["product_summary"] = forecast_summary_df
-        
-    # レポート生成のチェックボックスを有効化するためのフラグを立てる
-    st.session_state["product_ready"] = True 
+    if df["Date"].isna().sum() > 0:
+        st.warning("⚠️ 無効な日付がある行は除外されます。")
+        df = df.dropna(subset=["Date"])
 
-    st.success("全ての分析とサマリーの作成が完了しました。左側のレポート生成設定で、この結果を選択できます。")
+    st.success("データ整形完了！")
+
+    # ② 期間を設定
+    st.subheader("② 分析する期間を設定")
+
+    min_date = df["Date"].min().date()
+    max_date = df["Date"].max().date()
+
+    start_date = st.date_input("開始日を選択", min_date)
+    end_date = st.date_input("終了日を選択", max_date)
+
+    if start_date > end_date:
+        st.error("❌ 開始日は終了日より前にしてください。")
+        return
+
+    # ここで比較しても、df["Date"] は tz なし、start/end も tz なしなので OK
+    df_period = df[
+        (df["Date"] >= pd.to_datetime(start_date)) &
+        (df["Date"] <= pd.to_datetime(end_date))
+    ]
+
+    st.write(f"期間内データ数：{len(df_period)}")
+    st.dataframe(df_period.head())
+
+    if df_period.empty:
+        st.warning("⚠️ 指定期間にデータがありません。")
+        return
+
+    st.success("期間設定完了！")
+
+    # ③ 指定期間内の売上集計
+    st.subheader("③ 指定期間内の売上集計")
+    grouped = df_period.groupby("Product").size().reset_index(name="SalesCount")
+    grouped = grouped.sort_values("SalesCount", ascending=False)
+    st.dataframe(grouped)
+
+    if grouped.empty:
+        st.warning("⚠️ 集計結果がありません。")
+        return
+
+    st.success("売上集計完了！")
+
+    # ④ 予測したい先の日数を設定
+    st.subheader("④ 何日先を予測しますか？")
+    days_ahead = st.number_input(
+        "予測したい日数を入力してください（例：7）",
+        min_value=1,
+        max_value=180,
+        value=7,
+        step=1
+    )
+    st.success(f"{days_ahead} 日先の予測を作成します。")
+
+    # ⑤ 販売予測
+    st.subheader("⑤ 販売予測（機械学習モデル）")
+    with st.spinner("モデルを学習し、予測を生成しています…"):
+        forecast_df = run_forecast_model(df_period, days_ahead)
+
+    st.dataframe(forecast_df)
+
+    st.session_state["product_summary"] = forecast_df
     st.session_state["forecast_done"] = True
+    st.session_state["product_ready"] = True
 
-    # 消さないで！！
-    if not st.session_state.get("rerun_triggered", False):
-        st.session_state["rerun_triggered"] = True
-        st.rerun()
+    st.success("✨ 販売予測が完了しました！")
