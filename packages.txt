@@ -1,0 +1,12 @@
+build-essential
+libcairo2
+libcairo2-dev
+libpango-1.0-0
+libpangocairo-1.0-0
+libpangoft2-1.0-0
+libgdk-pixbuf-2.0-0
+libffi-dev
+libxml2
+libxslt1.1
+fonts-dejavu-core
+shared-mime-info

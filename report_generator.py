@@ -4,49 +4,122 @@ import os
 from io import BytesIO
 from fpdf import FPDF
 from google import genai
+import tempfile
+import markdown
 
-def build_report_prompt(cluster_means: pd.DataFrame) -> str:
+
+# ======================================================
+# 🧠 プロンプト構築ロジック
+# ======================================================
+def build_report_prompt(data_summary, mode: str = "customer") -> str:
     """
-    クラスタ別平均RFMから、LLMに渡すプロンプト文字列を生成する。
+    Generates an LLM prompt according to the report type.
+    mode: "customer", "product", or "combined"
     """
-    # DataFrameをテキストに整形
-    table_text = cluster_means.round(2).to_markdown()
+    def df_to_text(df_or_dict):
+        if isinstance(df_or_dict, pd.DataFrame):
+            return df_or_dict.round(2).to_markdown(index=False)
+        elif isinstance(df_or_dict, dict):
+            return "\n".join(f"- {k}: {v}" for k, v in df_or_dict.items())
+        else:
+            return str(df_or_dict)
 
-    prompt = f"""
-    あなたは、データドリブンマーケティングに詳しいアナリストです。
-    以下は、RFM分析とK-Meansクラスタリングの結果として得られた
-    「クラスタ別の平均値」です。
+    if mode == "customer":
+        table_text = df_to_text(data_summary["rfm"])
+        prompt = f"""
+        You are a data-driven marketing analyst.
+        Below is the summary table of customer segmentation based on
+        RFM analysis and K-Means clustering.
 
-    テーブル:
-    {table_text}
+        Table:
+        {table_text}
 
-    各列の意味:
-    - Recency: 最終購入からの日数（小さいほど最近購入している）
-    - Frequency: 購入回数
-    - Monetary: 総購入金額
+        Column definitions:
+        - Recency: Days since the last purchase (lower means more recent)
+        - Frequency: Number of purchases
+        - Monetary: Total purchase amount
 
-    上記のクラスタ別指標をもとに、以下の観点で日本語のレポートを書いてください。
+        Please write a professional business report in English addressing the following points:
 
-    1. 各クラスタの特徴（どのような顧客層か）をわかりやすく説明
-    2. 重要なインサイト（例：売上を支えているのはどの層か、離脱傾向の層はどこか）
-    3. 各クラスタごとに推奨されるマーケティング施策（3〜5個程度）
-    4. 全体としての戦略提案（どの層に優先的に投資すべきかなど）
+        1. Describe the characteristics of each cluster (what kind of customer group it represents)
+        2. Highlight key insights (e.g., which clusters drive revenue, which show signs of churn)
+        3. Recommend 3–5 marketing actions for each cluster
+        4. Suggest an overall strategic focus (which clusters deserve priority investment)
 
-    出力フォーマット:
-    - 見出し（例: 「1. クラスタ概要」「2. 各クラスタの特徴」など）
-    - 箇条書きも活用し、マーケ担当者がすぐ読める形にする
-    - です・ます調で書く
-    """
+        Output format:
+        - Use clear section headings such as “1. Cluster Overview”, “2. Insights”, etc.
+        - Use bullet points for readability
+        - Write in concise, natural business English
+        """
 
-    # 不要なインデントを削除
+    elif mode == "product":
+        table_text = df_to_text(data_summary["forecast"])
+        prompt = f"""
+        You are a retail data analyst.
+        Below is a summary of product sales performance and forecast results.
+
+        Table:
+        {table_text}
+
+        Column definitions (example):
+        - Product: Product name
+        - SalesCount: Number of units sold
+        - MAE / RMSE / R²: Forecast accuracy metrics
+
+        Please write a concise English report covering the following:
+
+        1. Summarize trends in best-selling and underperforming products
+        2. Identify categories or products with potential growth in demand
+        3. Discuss underperforming products and improvement opportunities (pricing, promotion, inventory, etc.)
+        4. Propose short- and mid-term sales strategies
+
+        Output format:
+        - Use section headings such as “1. Sales Trends”, “2. Demand Forecast”, “3. Strategic Recommendations”
+        - Focus on clear bullet points
+        - Use concise, professional English
+        """
+
+    elif mode == "combined":
+        rfm_text = df_to_text(data_summary["rfm"])
+        forecast_text = df_to_text(data_summary["forecast"])
+        prompt = f"""
+        You are an expert in data-driven marketing analytics.
+        Below are two datasets: one for customer segmentation (RFM clustering)
+        and another for product sales forecasting.
+
+        [Customer Segment Summary]
+        {rfm_text}
+
+        [Product Sales Forecast Summary]
+        {forecast_text}
+
+        Please write an integrated English marketing report addressing:
+
+        1. The relationship between customer segments and product sales patterns
+           (e.g., which high-value customers purchase which product categories)
+        2. Marketing strategies tailored to each customer segment
+        3. Key priorities for upcoming campaigns (cross-sell, up-sell, inventory optimization)
+        4. A holistic business strategy to maximize revenue growth
+
+        Output format:
+        - Use structured sections and bullet points
+        - Write in natural, professional business English
+        - The tone should resemble an executive-level strategic report
+        """
+    else:
+        raise ValueError(f"Unknown mode: {mode}")
+
     return textwrap.dedent(prompt)
 
+# ======================================================
+# 🧠 LLM呼び出しロジック
+# ======================================================
 
-def generate_llm_report(cluster_means: pd.DataFrame, model_name: str = "gpt-4o-mini") -> str:
+def generate_llm_report(data_summary, mode: str = "customer") -> str:
     """
-    クラスタ別平均RFMからLLMレポートを生成して文字列として返す。
+    LLMを使ってマーケティングレポートを生成する。
     """
-    prompt = build_report_prompt(cluster_means)
+    prompt = build_report_prompt(data_summary, mode)
 
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
@@ -54,10 +127,31 @@ def generate_llm_report(cluster_means: pd.DataFrame, model_name: str = "gpt-4o-m
 
     client = genai.Client(api_key=api_key)
 
-    response = client.models.generate_content(
-        model="gemini-2.5-flash", contents=prompt
-    )
+    try:
+        response = client.models.generate_content(
+            model="gemini-2.5-flash",
+            contents=prompt
+        )
+        return response.text
 
+    except Exception as e:
+        # APIエラーをStreamlit側でハンドルしやすいように明示
+        raise RuntimeError(f"LLMレポート生成中にエラーが発生しました: {e}")
+
+
+# ======================================================
+# 📄 PDF出力機能
+# ======================================================
+from weasyprint import HTML
+
+def export_report_to_pdf(report_md: str, title: str = "Marketing Report") -> str:
+    """
+    Converts Markdown to HTML and exports as PDF using WeasyPrint.
+    Works on ARM (Apple Silicon) and Linux x86_64 alike.
+    """
+    html_content = markdown.markdown(
+        report_md, extensions=["tables", "fenced_code", "nl2br", "sane_lists"]
+    )
     return response.text
 
 
@@ -76,3 +170,5 @@ def to_pdf_bytes(text: str) -> bytes:
     buffer = BytesIO()
     pdf.output(buffer)
     return buffer.getvalue()
+
+  
