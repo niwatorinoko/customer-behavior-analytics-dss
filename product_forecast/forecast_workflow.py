@@ -1,126 +1,174 @@
 import streamlit as st
 import pandas as pd
 import numpy as np
+from sklearn.linear_model import LinearRegression
+from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
+from io import BytesIO
 
-def simulate_product_forecast(product_summary: pd.DataFrame) -> pd.DataFrame:
+@st.cache_data
+def load_csv(file_bytes: bytes) -> pd.DataFrame:
+    """Loads CSV data, attempting UTF-8 SIG first, then falling back to Shift-JIS."""
+    try:
+        return pd.read_csv(BytesIO(file_bytes), encoding="utf_8_sig")
+    except UnicodeDecodeError:
+        return pd.read_csv(BytesIO(file_bytes), encoding="shift_jis", errors="ignore")
+
+
+@st.cache_data
+def run_forecast_model(df: pd.DataFrame, days_ahead: int) -> pd.DataFrame:
     """
-    Adds dummy metrics for sales forecast accuracy based on the aggregated results.
-    A machine learning model would be integrated here in a real application.
+    Performs sales forecasting using a simple Linear Regression model for each product.
     """
-    
-    # Generate dummy accuracy metrics
-    # Assume higher accuracy for products with more sales (likely more important products)
-    
-    def get_dummy_metrics(count):
-        # MAE (Mean Absolute Error), RMSE (Root Mean Square Error), R² (R-squared)
-        if count > 500:
-            return 15.0, 25.0, 0.85
-        elif count > 100:
-            return 25.0, 40.0, 0.75
-        else:
-            return 35.0, 50.0, 0.65
-            
-    # Calculate and add new columns
-    metrics = product_summary['SalesCount'].apply(
-        lambda x: pd.Series(get_dummy_metrics(x))
-    )
-    metrics.columns = ['MAE', 'RMSE', 'R²']
-    
-    forecast_summary = pd.concat([product_summary, metrics], axis=1)
-    
-    return forecast_summary.sort_values(by='SalesCount', ascending=False)
+    results = []
+
+    for product in df["Product"].unique():
+        subset = df[df["Product"] == product].copy()
+        # Daily sales count
+        subset = subset.groupby("Date").size().reset_index(name="SalesCount")
+
+        # Skip if data is insufficient for modeling
+        if subset.empty or len(subset) < 5:
+            continue
+
+        # Feature engineering: Convert date to a sequential day index
+        subset["DayIndex"] = (subset["Date"] - subset["Date"].min()).dt.days
+        X = subset[["DayIndex"]]
+        y = subset["SalesCount"]
+
+        # Train Linear Regression Model
+        model = LinearRegression()
+        model.fit(X, y)
+
+        # Evaluate model performance
+        y_pred = model.predict(X)
+        mae = mean_absolute_error(y, y_pred)
+        rmse = np.sqrt(mean_squared_error(y, y_pred))
+        r2 = r2_score(y, y_pred)
+
+        # Predict future sales
+        last_idx = subset["DayIndex"].max()
+        future_idx = np.array([[last_idx + days_ahead]])
+        future_sales = model.predict(future_idx)[0]
+
+        results.append({
+            "Product": product,
+            "TotalSales": int(y.sum()),
+            "PredictedSales": round(float(future_sales), 2),
+            "MAE": round(float(mae), 2),
+            "RMSE": round(float(rmse), 2),
+            "R²": round(float(r2), 2)
+        })
+
+    if not results:
+        return pd.DataFrame(columns=["Product", "TotalSales", "PredictedSales", "MAE", "RMSE", "R²"])
+
+    return pd.DataFrame(results).sort_values("TotalSales", ascending=False)
+
 
 def run_forecast_tab():
-    st.header("📦 Product Sales Forecasting (Trial Implementation)")
-    st.write("Performs simple sales trend analysis from data including date and product name (+ quantity), and creates a summary for reporting.")
+    st.header("📦 Product Sales Forecasting (Step-by-step Workflow)")
 
-    uploaded_file = st.file_uploader("Upload Sales Data CSV", type="csv", key="forecast")
+    # ① Data Preprocessing
+    st.subheader("① Data Preprocessing")
+
+    uploaded_file = st.file_uploader("Upload Sales Data CSV", type="csv")
 
     if not uploaded_file:
-        # Clear session state if no file is present
+        st.info("Upload a CSV to proceed to the next step.")
+        # Clear session states if no file is present
         st.session_state.pop("product_summary", None)
+        st.session_state["forecast_done"] = False
         st.session_state["product_ready"] = False
         return
-    try:
-        uploaded_file.seek(0) # Reset pointer just in case
-        df = pd.read_csv(uploaded_file, encoding='utf_8_sig') 
-        st.success(f"File `{uploaded_file.name}` loaded successfully (UTF-8 SIG).")
-    
-    except UnicodeDecodeError:
-        # 2. Retry with Shift-JIS on failure
-        try:
-            uploaded_file.seek(0)
-            df = pd.read_csv(uploaded_file, encoding='shift_jis')
-            st.warning("⚠️ File was loaded as Shift-JIS.")
-        except Exception as e_sjis:
-            # 3. Last resort: Load with Shift-JIS, ignoring errors
-            try:
-                uploaded_file.seek(0)
-                df = pd.read_csv(uploaded_file, encoding='shift_jis', errors='ignore')
-                st.error("🚨 Critical encoding error. Loaded by ignoring invalid characters. Please check your data.")
-            except Exception as e_ignore:
-                st.error(f"Failed to load file. Please check encoding: {e_ignore}")
-                st.session_state.pop("product_summary", None)
-                st.session_state["product_ready"] = False
-                return
-    
-    except Exception as e:
-        # Other general loading errors
-        st.error(f"An unexpected error occurred while loading the file: {e}")
-        st.session_state.pop("product_summary", None)
-        st.session_state["product_ready"] = False
-        return
-    
-    # --- Processing after file upload ---
-    
-    st.subheader("① Uploaded Data")
+
+    # Use the unified load_csv function
+    df = load_csv(uploaded_file.getvalue())
+    st.write("Uploaded Data:")
     st.dataframe(df.head())
 
-    # Date format conversion
-    if "Date" in df.columns:
-        df["Date"] = pd.to_datetime(df["Date"], errors="coerce")
-        # Warning if dates are missing
-        if df["Date"].isna().sum() > 0:
-            st.warning("⚠️ Some dates in the 'Date' column are invalid.")
-
-    # Aggregation example: Sales count per product
-    st.subheader("② Product Sales Aggregation (Simple)")
-    if "Product" not in df.columns:
-        st.error("❌ The 'Product' column does not exist. Please check the column names in your CSV.")
-        st.session_state.pop("product_summary", None)
-        st.session_state["product_ready"] = False
+    if "Date" not in df.columns or "Product" not in df.columns:
+        st.error("❌ The 'Date' and 'Product' columns are required.")
         return
-        
-    # Perform product aggregation
-    product_summary = df.groupby("Product").size().reset_index(name="SalesCount")
-    st.dataframe(product_summary.sort_values("SalesCount", ascending=False))
 
-    # Daily trend (optional)
-    if "Date" in df.columns:
-        st.subheader("③ Daily Sales Trend")
-        daily_sales = df.groupby("Date").size().reset_index(name="SalesCount")
-        st.line_chart(daily_sales.set_index("Date")["SalesCount"])
-        
-    st.success("Simple sales analysis completed. Creating summary for report.")
-    
-    # 1. Execute Forecast Simulation (immediate execution)
-    forecast_summary_df = simulate_product_forecast(product_summary)
+    # Force alignment of timezones (remove timezone info for simplicity)
+    df["Date"] = pd.to_datetime(df["Date"], errors="coerce", utc=True).dt.tz_convert(None)
 
-    # 2. Display Results
-    st.subheader("④ Forecast Summary (For Report Integration)")
-    st.info("Forecast accuracy metrics are simulated based on sales count.")
-    st.dataframe(forecast_summary_df)
-        
-    # 3. Save to session state for report integration
-    st.session_state["product_summary"] = forecast_summary_df
-        
-    # Set flag to enable report generation checkbox
-    st.session_state["product_ready"] = True 
+    if df["Date"].isna().sum() > 0:
+        st.warning("⚠️ Rows with invalid dates will be excluded.")
+        df = df.dropna(subset=["Date"])
 
-    st.success("All analysis and summary creation are complete. You can select this result in the Report Generation Settings on the left.")
+    st.success("Data preprocessing complete!")
+
+    # ② Set Analysis Period
+    st.subheader("② Set Analysis Period")
+
+    if df.empty:
+         st.error("❌ Dataframe is empty after preprocessing.")
+         return
+
+    min_date = df["Date"].min().date()
+    max_date = df["Date"].max().date()
+
+    start_date = st.date_input("Select Start Date", min_date)
+    end_date = st.date_input("Select End Date", max_date)
+
+    if start_date > end_date:
+        st.error("❌ The start date must be before the end date.")
+        return
+
+    # Filter data for the selected period
+    df_period = df[
+        (df["Date"] >= pd.to_datetime(start_date)) &
+        (df["Date"] <= pd.to_datetime(end_date))
+    ]
+
+    st.write(f"Data points within the period: {len(df_period)}")
+    st.dataframe(df_period.head())
+
+    if df_period.empty:
+        st.warning("⚠️ No data available for the specified period.")
+        return
+
+    st.success("Period setting complete!")
+
+    # ③ Aggregate Sales within the Period
+    st.subheader("③ Aggregate Sales within the Period")
+    grouped = df_period.groupby("Product").size().reset_index(name="SalesCount")
+    grouped = grouped.sort_values("SalesCount", ascending=False)
+    st.dataframe(grouped)
+
+    if grouped.empty:
+        st.warning("⚠️ No aggregation results.")
+        return
+
+    st.success("Sales aggregation complete!")
+
+    # ④ Set Forecast Horizon
+    st.subheader("④ How many days ahead to forecast?")
+    days_ahead = st.number_input(
+        "Enter the number of days to forecast (e.g., 7)",
+        min_value=1,
+        max_value=180,
+        value=7,
+        step=1
+    )
+    st.success(f"Creating a forecast for the next {days_ahead} days.")
+
+    # ⑤ Sales Forecasting
+    st.subheader("⑤ Sales Forecasting (Machine Learning Model)")
+    with st.spinner("Training model and generating forecast..."):
+        # Use the machine learning model
+        forecast_df = run_forecast_model(df_period, days_ahead)
+
+    st.dataframe(forecast_df)
+
+    st.session_state["product_summary"] = forecast_df
     st.session_state["forecast_done"] = True
-
-    # Keep this line!
+    st.session_state["product_ready"] = True
+    
+    st.success("✨ Sales forecast complete!")
+    
+    # Keep this line! (Rerun trigger for sidebar status update)
     if not st.session_state.get("rerun_triggered", False):
         st.session_state["rerun_triggered"] = True
         st.rerun()
