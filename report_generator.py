@@ -1,6 +1,8 @@
 import textwrap
 import pandas as pd
 import os
+from io import BytesIO
+from fpdf import FPDF
 from google import genai
 import tempfile
 import markdown
@@ -150,43 +152,23 @@ def export_report_to_pdf(report_md: str, title: str = "Marketing Report") -> str
     html_content = markdown.markdown(
         report_md, extensions=["tables", "fenced_code", "nl2br", "sane_lists"]
     )
+    return response.text
 
-    html_full = f"""
-    <html>
-    <head>
-        <meta charset="utf-8">
-        <style>
-            body {{
-                font-family: 'DejaVu Sans', sans-serif;
-                margin: 40px;
-                color: #2c3e50;
-                line-height: 1.6;
-            }}
-            h1, h2, h3 {{
-                color: #1a5276;
-            }}
-            table {{
-                border-collapse: collapse;
-                width: 100%;
-                margin-top: 15px;
-            }}
-            th, td {{
-                border: 1px solid #bbb;
-                padding: 8px 10px;
-                text-align: left;
-            }}
-            th {{
-                background-color: #f2f2f2;
-            }}
-        </style>
-    </head>
-    <body>
-        <h1>{title}</h1>
-        {html_content}
-    </body>
-    </html>
+
+def to_pdf_bytes(text: str) -> bytes:
     """
+    レポート文字列をPDFバイナリに変換して返す。
+    """
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_auto_page_break(auto=True, margin=15)
+    pdf.set_font("Arial", size=12)
 
-    temp_path = tempfile.mktemp(suffix=".pdf")
-    HTML(string=html_full).write_pdf(temp_path)
-    return temp_path
+    for line in text.splitlines():
+        pdf.multi_cell(0, 10, txt=line)
+
+    buffer = BytesIO()
+    pdf.output(buffer)
+    return buffer.getvalue()
+
+  
