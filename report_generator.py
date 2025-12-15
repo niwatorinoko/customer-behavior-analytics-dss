@@ -1,6 +1,8 @@
 import textwrap
 import pandas as pd
 import os
+from io import BytesIO
+from fpdf import FPDF
 from google import genai
 
 def build_report_prompt(cluster_means: pd.DataFrame) -> str:
@@ -57,3 +59,20 @@ def generate_llm_report(cluster_means: pd.DataFrame, model_name: str = "gpt-4o-m
     )
 
     return response.text
+
+
+def to_pdf_bytes(text: str) -> bytes:
+    """
+    レポート文字列をPDFバイナリに変換して返す。
+    """
+    pdf = FPDF()
+    pdf.add_page()
+    pdf.set_auto_page_break(auto=True, margin=15)
+    pdf.set_font("Arial", size=12)
+
+    for line in text.splitlines():
+        pdf.multi_cell(0, 10, txt=line)
+
+    buffer = BytesIO()
+    pdf.output(buffer)
+    return buffer.getvalue()

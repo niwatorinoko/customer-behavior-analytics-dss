@@ -5,7 +5,12 @@ import os
 from data_preprocessing import preprocess_retail_data
 from rfm import calculate_rfm
 from clustering import cluster_rfm
-from report_generator import generate_llm_report
+from report_generator import generate_llm_report, to_pdf_bytes
+
+if "report_pdf" not in st.session_state:
+    st.session_state["report_pdf"] = None
+if "trigger_download" not in st.session_state:
+    st.session_state["trigger_download"] = False
 
 st.title("Customer Segmentation DSS")
 st.write("CSVをアップロードするだけでRFM分析＋クラスタリングを実行します。")
@@ -46,13 +51,36 @@ if uploaded_file:
     api_key = os.getenv("GEMINI_API_KEY")
     if not api_key:
         st.info("LLMレポートを使うには、環境変数 GEMINI_API_KEY を設定してください（.env に記載して実行）。")
-    elif st.button("レポートを生成する"):
+    elif st.button("生成してPDFをダウンロード"):
         with st.spinner("レポート生成中..."):
             try:
                 report_text = generate_llm_report(cluster_means)
                 st.markdown("### 📄 生成されたレポート")
                 st.write(report_text)
+                st.session_state["report_pdf"] = to_pdf_bytes(report_text)
+                st.session_state["trigger_download"] = True
             except Exception as e:
                 st.error(f"レポート生成中にエラーが発生しました: {e}")
+
+    if st.session_state.get("report_pdf"):
+        st.download_button(
+            label="PDFをダウンロード",
+            data=st.session_state["report_pdf"],
+            file_name="cluster_report.pdf",
+            mime="application/pdf",
+            key="download_report",
+        )
+
+        if st.session_state.get("trigger_download"):
+            st.markdown(
+                """
+                <script>
+                const btn = window.parent.document.querySelector('button[aria-label="PDFをダウンロード"]');
+                if (btn) { btn.click(); }
+                </script>
+                """,
+                unsafe_allow_html=True,
+            )
+            st.session_state["trigger_download"] = False
 
     st.success("分析が完了しました！")
