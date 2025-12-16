@@ -5,6 +5,7 @@ from sklearn.linear_model import LinearRegression
 from sklearn.metrics import mean_absolute_error, mean_squared_error, r2_score
 from io import BytesIO
 
+
 @st.cache_data
 def load_csv(file_bytes: bytes) -> pd.DataFrame:
     """Loads CSV data, attempting UTF-8 SIG first, then falling back to Shift-JIS."""
@@ -103,8 +104,8 @@ def run_forecast_tab():
     st.subheader("② Set Analysis Period")
 
     if df.empty:
-         st.error("❌ Dataframe is empty after preprocessing.")
-         return
+        st.error("❌ Dataframe is empty after preprocessing.")
+        return
 
     min_date = df["Date"].min().date()
     max_date = df["Date"].max().date()
@@ -157,18 +158,15 @@ def run_forecast_tab():
     # ⑤ Sales Forecasting
     st.subheader("⑤ Sales Forecasting (Machine Learning Model)")
     with st.spinner("Training model and generating forecast..."):
-        # Use the machine learning model
         forecast_df = run_forecast_model(df_period, days_ahead)
 
     st.dataframe(forecast_df)
 
+    st.success("Sales forecast complete!")
     st.session_state["product_summary"] = forecast_df
     st.session_state["forecast_done"] = True
     st.session_state["product_ready"] = True
-    
-    st.success("✨ Sales forecast complete!")
-    
-    # Keep this line! (Rerun trigger for sidebar status update)
-    if not st.session_state.get("rerun_triggered", False):
-        st.session_state["rerun_triggered"] = True
+
+    if not st.session_state.get("rerun_triggered_forecast", False):
+        st.session_state["rerun_triggered_forecast"] = True
         st.rerun()

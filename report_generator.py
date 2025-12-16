@@ -1,11 +1,13 @@
+import os
+import time
 import textwrap
 import pandas as pd
-import os
+import markdown
 from io import BytesIO
 from fpdf import FPDF
 from google import genai
+from weasyprint import HTML
 import tempfile
-import markdown
 
 
 # ======================================================
@@ -16,8 +18,13 @@ def build_report_prompt(data_summary, mode: str = "customer") -> str:
     Generates an LLM prompt according to the report type.
     mode: "customer", "product", or "combined"
     """
+
     def df_to_text(df_or_dict):
+        """Convert DataFrame or dict into a readable markdown snippet."""
         if isinstance(df_or_dict, pd.DataFrame):
+            # 大きすぎるDataFrameは先頭10行に制限
+            if len(df_or_dict) > 10:
+                df_or_dict = df_or_dict.head(10)
             return df_or_dict.round(2).to_markdown(index=False)
         elif isinstance(df_or_dict, dict):
             return "\n".join(f"- {k}: {v}" for k, v in df_or_dict.items())
@@ -27,7 +34,7 @@ def build_report_prompt(data_summary, mode: str = "customer") -> str:
     if mode == "customer":
         table_text = df_to_text(data_summary["rfm"])
         prompt = f"""
-        You are a data-driven marketing analyst.
+        You are an expert marketing consultant.
         Below is the summary table of customer segmentation based on
         RFM analysis and K-Means clustering.
 
@@ -55,7 +62,7 @@ def build_report_prompt(data_summary, mode: str = "customer") -> str:
     elif mode == "product":
         table_text = df_to_text(data_summary["forecast"])
         prompt = f"""
-        You are a retail data analyst.
+        You are an expert marketing consultant.
         Below is a summary of product sales performance and forecast results.
 
         Table:
@@ -83,7 +90,7 @@ def build_report_prompt(data_summary, mode: str = "customer") -> str:
         rfm_text = df_to_text(data_summary["rfm"])
         forecast_text = df_to_text(data_summary["forecast"])
         prompt = f"""
-        You are an expert in data-driven marketing analytics.
+        You are an expert marketing consultant.
         Below are two datasets: one for customer segmentation (RFM clustering)
         and another for product sales forecasting.
 
@@ -111,13 +118,14 @@ def build_report_prompt(data_summary, mode: str = "customer") -> str:
 
     return textwrap.dedent(prompt)
 
-# ======================================================
-# 🧠 LLM呼び出しロジック
-# ======================================================
 
+# ======================================================
+# 🧠 Gemini API呼び出し（リトライ付き）
+# ======================================================
 def generate_llm_report(data_summary, mode: str = "customer") -> str:
     """
-    LLMを使ってマーケティングレポートを生成する。
+    Generates a marketing report using the Google Gemini API.
+    Automatically retries on 429 rate-limit errors.
     """
     prompt = build_report_prompt(data_summary, mode)
 
@@ -127,37 +135,72 @@ def generate_llm_report(data_summary, mode: str = "customer") -> str:
 
     client = genai.Client(api_key=api_key)
 
-    try:
-        response = client.models.generate_content(
-            model="gemini-2.5-flash",
-            contents=prompt
-        )
-        return response.text
+    max_retries = 3
+    for attempt in range(max_retries):
+        try:
+            response = client.models.generate_content(
+                model="gemini-2.5-flash",
+                contents=prompt
+            )
+            return response.text
 
-    except Exception as e:
-        # APIエラーをStreamlit側でハンドルしやすいように明示
-        raise RuntimeError(f"LLMレポート生成中にエラーが発生しました: {e}")
+        except Exception as e:
+            error_str = str(e)
+            # レート制限時のリトライ
+            if "RESOURCE_EXHAUSTED" in error_str or "429" in error_str:
+                wait_time = 2 ** attempt
+                print(f"[Gemini] Rate limit hit. Retrying in {wait_time}s...")
+                time.sleep(wait_time)
+                continue
+            else:
+                raise RuntimeError(f"LLMレポート生成中にエラーが発生しました: {e}")
+
+    raise RuntimeError("Gemini API rate limit exceeded repeatedly. Please try again later.")
 
 
 # ======================================================
-# 📄 PDF出力機能
+# 📄 Markdown → PDF 出力
 # ======================================================
-from weasyprint import HTML
-
 def export_report_to_pdf(report_md: str, title: str = "Marketing Report") -> str:
     """
     Converts Markdown to HTML and exports as PDF using WeasyPrint.
-    Works on ARM (Apple Silicon) and Linux x86_64 alike.
     """
     html_content = markdown.markdown(
-        report_md, extensions=["tables", "fenced_code", "nl2br", "sane_lists"]
+        report_md,
+        extensions=["tables", "fenced_code", "nl2br", "sane_lists"]
     )
-    return response.text
+
+    html_full = f"""
+    <html>
+    <head>
+        <meta charset="utf-8">
+        <style>
+            body {{ font-family: Arial, sans-serif; margin: 40px; }}
+            h1, h2, h3 {{ color: #2E3A59; }}
+            table {{ border-collapse: collapse; width: 100%; }}
+            th, td {{ border: 1px solid #ddd; padding: 8px; }}
+            tr:nth-child(even) {{ background-color: #f9f9f9; }}
+            p {{ line-height: 1.6; }}
+        </style>
+    </head>
+    <body>
+        <h1>{title}</h1>
+        {html_content}
+    </body>
+    </html>
+    """
+
+    with tempfile.NamedTemporaryFile(delete=False, suffix=".pdf") as tmp:
+        HTML(string=html_full).write_pdf(tmp.name)
+        return tmp.name
 
 
+# ======================================================
+# 🧩 Fallback: FPDFによる軽量PDF出力
+# ======================================================
 def to_pdf_bytes(text: str) -> bytes:
     """
-    レポート文字列をPDFバイナリに変換して返す。
+    Converts a report string to a simple PDF (fallback method).
     """
     pdf = FPDF()
     pdf.add_page()
@@ -170,5 +213,3 @@ def to_pdf_bytes(text: str) -> bytes:
     buffer = BytesIO()
     pdf.output(buffer)
     return buffer.getvalue()
-
-  

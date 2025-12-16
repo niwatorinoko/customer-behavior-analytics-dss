@@ -40,6 +40,7 @@ def run_segmentation_tab():
         st.session_state["rfm_clustered"] = rfm_clustered
         st.session_state["cluster_means"] = cluster_means
         
+        
         # Keep this line!
         if not st.session_state.get("rerun_triggered", False):
             st.session_state["rerun_triggered"] = True
